@@ -2,8 +2,9 @@ import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
-let client: ReturnType<typeof createClient> | null = null;
-export function db() {
+let client: any = null;
+export function db(): any {
+
   if (!client) {
     client = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
       auth: { persistSession: false },
