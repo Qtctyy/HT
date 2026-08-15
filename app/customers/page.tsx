@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { requireAgent, db, DAY_LABELS } from '@/lib/core';
+import { requireAgent, db } from '@/lib/core';
+import { DAY_LABELS } from '@/lib/format';
 import { saveRide, toggleActive, deleteRide } from '@/lib/actions';
 import { NavBar } from '@/components/ui';
 
@@ -22,6 +23,8 @@ export default async function CustomersPage({
         </main>
       );
     }
+    const everyDay = !ride.one_time_date && (!ride.days_of_week || ride.days_of_week.length === 0);
+
     return (
       <main className="screen">
         <header className="topbar">
@@ -56,7 +59,8 @@ export default async function CustomersPage({
           <label>Time<input type="time" name="way_back_time" defaultValue={ride.way_back_time ?? ''} /></label>
 
           <fieldset className="days-picker">
-            <legend>Days (leave all unchecked for every day)</legend>
+            <legend>Days</legend>
+            <label className="day-check"><input type="checkbox" name="every_day" defaultChecked={everyDay} /> Every day</label>
             {DAY_LABELS.map((label, i) => (
               <label key={i} className="day-check">
                 <input type="checkbox" name="days" value={i} defaultChecked={(ride.days_of_week ?? []).includes(i)} />
@@ -130,7 +134,8 @@ export default async function CustomersPage({
           <label>Destination<input type="text" name="way_back_dest" /></label>
           <label>Time<input type="time" name="way_back_time" /></label>
           <fieldset className="days-picker">
-            <legend>Days (leave all unchecked for every day)</legend>
+            <legend>Days</legend>
+            <label className="day-check"><input type="checkbox" name="every_day" defaultChecked /> Every day</label>
             {DAY_LABELS.map((label, i) => (
               <label key={i} className="day-check">
                 <input type="checkbox" name="days" value={i} />
