@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 
-export function NavBar() {
+export function NavBar({ active }: { active?: string }) {
   return (
     <nav className="border-b bg-white">
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
@@ -12,20 +12,41 @@ export function NavBar() {
         </Link>
 
         <div className="flex items-center gap-4 text-sm">
-          <Link href="/today">Today</Link>
-          <Link href="/customers">Customers</Link>
+          <Link
+            href="/today"
+            className={active === 'today' ? 'font-semibold' : ''}
+          >
+            Today
+          </Link>
+
+          <Link
+            href="/customers"
+            className={active === 'customers' ? 'font-semibold' : ''}
+          >
+            Customers
+          </Link>
         </div>
       </div>
     </nav>
   );
 }
 
-export function CliqCopyButton({ value }: { value: string }) {
+export function CliqCopyButton({
+  value,
+  alias,
+}: {
+  value?: string;
+  alias?: string;
+}) {
   const [copied, setCopied] = useState(false);
 
+  const text = alias ?? value ?? '';
+
   async function copy() {
+    if (!text) return;
+
     try {
-      await navigator.clipboard.writeText(value);
+      await navigator.clipboard.writeText(text);
       setCopied(true);
 
       setTimeout(() => {
