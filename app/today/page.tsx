@@ -1,11 +1,12 @@
 import Link from 'next/link';
+import { requireAgent, db } from '@/lib/core';
 import {
-  requireAgent, getBusinessDate, weekdayOf, db,
-  isScheduledToday, activeLegs, legTime, legPickup, legDest, legStatus,
-  formatTime, formatMoney, callLink, waLink, sumDistinctRideDay, type Leg,
-} from '@/lib/core';
-import { completeLeg, uncompleteLeg, skipLeg, unskipLeg, addOneOffRide } from '@/lib/actions';
-import { NavBar, CliqCopyButton } from '@/components/ui';
+  getBusinessDate, weekdayOf, isScheduledToday, activeLegs,
+  legTime, legPickup, legDest, legStatus, sumDistinctRideDay,
+} from '@/lib/format';
+import { addOneOffRide } from '@/lib/actions';
+import { NavBar } from '@/components/ui';
+import { RideList } from '@/components/RideList';
 
 export default async function TodayPage({
   searchParams,
@@ -18,88 +19,40 @@ export default async function TodayPage({
   const businessDate = getBusinessDate();
   const weekday = weekdayOf(businessDate);
 
-  let query = db().from('rides').select('*');
-  if (view === 'mine') query = query.eq('agent', agent);
-  const { data } = await query;
-  const allRides = (data ?? []) as any[];
-  const todaysRides = allRides.filter((r) => isScheduledToday(r, weekday, businessDate));
+  let ridesQuery = db().from('rides').select('*');
+  if (view === 'mine') ridesQuery = ridesQuery.eq('agent', agent);
 
-  const { data: historyToday } = await db()
+  let historyQuery = db()
     .from('trip_history')
     .select('ride_id, business_day, amount')
-    .eq('business_day', businessDate)
-    .in('agent', view === 'both' ? ['Hamzah', 'Talal'] : [agent]);
-  const earnedToday = sumDistinctRideDay((historyToday ?? []) as any[]);
+    .eq('business_day', businessDate);
+  if (view === 'mine') historyQuery = historyQuery.eq('agent', agent);
 
-  type LegItem = { ride: any; leg: Leg; status: 'pending' | 'done' | 'skipped' };
-  const items: LegItem[] = [];
-  for (const ride of todaysRides) {
-    for (const leg of activeLegs(ride)) {
-      items.push({ ride, leg, status: legStatus(ride, leg, businessDate) });
-    }
-  }
-  const pending = items.filter((i) => i.status === 'pending').sort((a, b) => legTime(a.ride, a.leg).localeCompare(legTime(b.ride, b.leg)));
-  const resolved = items.filter((i) => i.status !== 'pending');
+  const [{ data: rideRows }, { data: historyRows }] = await Promise.all([ridesQuery, historyQuery]);
 
-  const { data: myCustomers } = await db().from('rides').select('id, name').eq('agent', agent).order('name');
-  const seen = new Set<string>();
-  const customerOptions = (myCustomers ?? []).filter((c: any) => (seen.has(c.id) ? false : (seen.add(c.id), true)));
+  const allRides = (rideRows ?? []) as any[];
+  const todaysRides = allRides.filter((r) => isScheduledToday(r, weekday, businessDate));
+  const earnedToday = sumDistinctRideDay((historyRows ?? []) as any[]);
 
-  function LegCard({ item }: { item: LegItem }) {
-    const { ride, leg, status } = item;
-    const pickup = legPickup(ride, leg);
-    const dest = legDest(ride, leg);
-    const telHref = callLink(ride.mobile_number);
-    const waHref = waLink(ride.mobile_number);
-    const uberHref = `https://m.uber.com/ul/?action=setPickup&pickup[formatted_address]=${encodeURIComponent(pickup || '')}&pickup[nickname]=${encodeURIComponent(pickup || '')}&dropoff[formatted_address]=${encodeURIComponent(dest || '')}&dropoff[nickname]=${encodeURIComponent(dest || '')}`;
-    const legLabel = leg === 'to_work' ? 'To work' : 'Way back';
+  const items = todaysRides.map((ride) => ({
+    rideId: ride.id as string,
+    name: ride.name as string,
+    agent: ride.agent as string,
+    amount: Number(ride.amount) || 0,
+    mobileNumber: ride.mobile_number as string | null,
+    cliqAlias: ride.cliq_alias as string | null,
+    legs: activeLegs(ride).map((leg) => ({
+      leg,
+      label: leg === 'to_work' ? 'To work' : 'Way back',
+      time: legTime(ride, leg) as string,
+      pickup: (legPickup(ride, leg) as string) || '',
+      dropoff: (legDest(ride, leg) as string) || '',
+      status: legStatus(ride, leg, businessDate),
+    })),
+  }));
 
-    return (
-      <li className={`ride-card ${status !== 'pending' ? 'is-done' : ''}`}>
-        <form action={status === 'done' ? uncompleteLeg : completeLeg} className="ride-check">
-          <input type="hidden" name="ride_id" value={ride.id} />
-          <input type="hidden" name="leg" value={leg} />
-          <input type="hidden" name="name" value={ride.name} />
-          <input type="hidden" name="amount" value={ride.amount} />
-          <button type="submit" className="check-btn" aria-label="Toggle done" disabled={status === 'skipped'}>
-            {status === 'done' ? '✓' : status === 'skipped' ? '–' : ''}
-          </button>
-        </form>
-        <div className="ride-body">
-          <div className="ride-top">
-            <span className="ride-time">{formatTime(legTime(ride, leg))} · {legLabel}</span>
-            <span className="ride-price">{formatMoney(Number(ride.amount))}</span>
-          </div>
-          <p className="ride-name">
-            {ride.name}
-            {view === 'both' && <span className="agent-tag">{ride.agent}</span>}
-            {status === 'skipped' && <span className="agent-tag">Skipped</span>}
-          </p>
-          <p className="ride-route">{pickup} → {dest}</p>
-          <div className="ride-actions">
-            {telHref && <a href={telHref} className="action-btn">Call</a>}
-            {waHref && <a href={waHref} className="action-btn" target="_blank" rel="noopener noreferrer">WhatsApp</a>}
-            <a href={uberHref} className="action-btn" target="_blank" rel="noopener noreferrer">Uber</a>
-            {ride.cliq_alias && <CliqCopyButton alias={ride.cliq_alias} />}
-            {status === 'pending' && (
-              <form action={skipLeg}>
-                <input type="hidden" name="ride_id" value={ride.id} />
-                <input type="hidden" name="leg" value={leg} />
-                <button type="submit" className="action-btn">Skip</button>
-              </form>
-            )}
-            {status === 'skipped' && (
-              <form action={unskipLeg}>
-                <input type="hidden" name="ride_id" value={ride.id} />
-                <input type="hidden" name="leg" value={leg} />
-                <button type="submit" className="action-btn">Unskip</button>
-              </form>
-            )}
-          </div>
-        </div>
-      </li>
-    );
-  }
+  const doneCount = items.reduce((n, r) => n + r.legs.filter((l) => l.status === 'done').length, 0);
+  const pendingCount = items.reduce((n, r) => n + r.legs.filter((l) => l.status === 'pending').length, 0);
 
   return (
     <main className="screen">
@@ -115,16 +68,13 @@ export default async function TodayPage({
       </header>
 
       <div className="summary-strip">
-        <span>{pending.length} left</span>
-        <span>{resolved.filter((i) => i.status === 'done').length} done</span>
+        <span>{pendingCount} left</span>
+        <span>{doneCount} done</span>
         <span>{earnedToday.toFixed(3)} JOD</span>
       </div>
 
       <details className="add-customer">
         <summary>+ Add one-off ride</summary>
-        {(!customerOptions.length) ? (
-          <p className="empty">No customers yet. <Link href="/customers">Add one first</Link>.</p>
-        ) : null}
         <form action={addOneOffRide} className="form">
           <label>Name<input type="text" name="name" required /></label>
           <label>Mobile number<input type="tel" name="mobile_number" placeholder="07XXXXXXXX" /></label>
@@ -139,10 +89,7 @@ export default async function TodayPage({
 
       {items.length === 0 && <p className="empty">No rides today.</p>}
 
-      <ul className="ride-list">
-        {pending.map((item) => <LegCard key={`${item.ride.id}-${item.leg}`} item={item} />)}
-        {resolved.map((item) => <LegCard key={`${item.ride.id}-${item.leg}`} item={item} />)}
-      </ul>
+      <RideList initialItems={items} view={view} />
 
       <NavBar active="today" />
     </main>
