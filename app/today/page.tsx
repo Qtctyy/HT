@@ -1,6 +1,10 @@
 import Link from 'next/link';
-import { requireAgent, getBusinessDate, ensureGenerated, formatTime, formatMoney, db } from '@/lib/core';
-import { markDone, unmarkDone, addOneOffRide } from '@/lib/actions';
+import {
+  requireAgent, getBusinessDate, weekdayOf, db,
+  isScheduledToday, activeLegs, legTime, legPickup, legDest, legStatus,
+  formatTime, formatMoney, callLink, waLink, sumDistinctRideDay, type Leg,
+} from '@/lib/core';
+import { completeLeg, uncompleteLeg, skipLeg, unskipLeg, addOneOffRide } from '@/lib/actions';
 import { NavBar, CliqCopyButton } from '@/components/ui';
 
 export default async function TodayPage({
@@ -12,53 +16,85 @@ export default async function TodayPage({
   const { view: viewParam } = await searchParams;
   const view = viewParam === 'both' ? 'both' : 'mine';
   const businessDate = getBusinessDate();
+  const weekday = weekdayOf(businessDate);
 
-  await ensureGenerated(businessDate);
-
-  let query = db()
-    .from('rides')
-    .select('id, pickup, dropoff, time, price, status, agent, customers(name, phone, cliq_alias)')
-    .eq('business_date', businessDate)
-    .order('time', { ascending: true });
+  let query = db().from('rides').select('*');
   if (view === 'mine') query = query.eq('agent', agent);
   const { data } = await query;
-  const rides = (data ?? []) as any[];
+  const allRides = (data ?? []) as any[];
+  const todaysRides = allRides.filter((r) => isScheduledToday(r, weekday, businessDate));
 
-  const pending = rides.filter((r) => r.status === 'pending');
-  const done = rides.filter((r) => r.status === 'done');
-  const earnedToday = done.reduce((sum, r) => sum + Number(r.price), 0);
+  const { data: historyToday } = await db()
+    .from('trip_history')
+    .select('ride_id, business_day, amount')
+    .eq('business_day', businessDate)
+    .in('agent', view === 'both' ? ['Hamzah', 'Talal'] : [agent]);
+  const earnedToday = sumDistinctRideDay((historyToday ?? []) as any[]);
 
-  const { data: myCustomers } = await db().from('customers').select('id, name').eq('agent', agent).order('name');
+  type LegItem = { ride: any; leg: Leg; status: 'pending' | 'done' | 'skipped' };
+  const items: LegItem[] = [];
+  for (const ride of todaysRides) {
+    for (const leg of activeLegs(ride)) {
+      items.push({ ride, leg, status: legStatus(ride, leg, businessDate) });
+    }
+  }
+  const pending = items.filter((i) => i.status === 'pending').sort((a, b) => legTime(a.ride, a.leg).localeCompare(legTime(b.ride, b.leg)));
+  const resolved = items.filter((i) => i.status !== 'pending');
 
-  function RideRow({ ride, isDone }: { ride: any; isDone: boolean }) {
-    const customer = ride.customers;
-    const phone = customer?.phone ?? '';
-    const telHref = phone ? `tel:${phone}` : undefined;
-    const waHref = phone ? `https://wa.me/${phone.replace(/[^\d]/g, '')}` : undefined;
-    const uberHref = `https://m.uber.com/ul/?action=setPickup&pickup[formatted_address]=${encodeURIComponent(ride.pickup)}&pickup[nickname]=${encodeURIComponent(ride.pickup)}&dropoff[formatted_address]=${encodeURIComponent(ride.dropoff)}&dropoff[nickname]=${encodeURIComponent(ride.dropoff)}`;
+  const { data: myCustomers } = await db().from('rides').select('id, name').eq('agent', agent).order('name');
+  const seen = new Set<string>();
+  const customerOptions = (myCustomers ?? []).filter((c: any) => (seen.has(c.id) ? false : (seen.add(c.id), true)));
+
+  function LegCard({ item }: { item: LegItem }) {
+    const { ride, leg, status } = item;
+    const pickup = legPickup(ride, leg);
+    const dest = legDest(ride, leg);
+    const telHref = callLink(ride.mobile_number);
+    const waHref = waLink(ride.mobile_number);
+    const uberHref = `https://m.uber.com/ul/?action=setPickup&pickup[formatted_address]=${encodeURIComponent(pickup || '')}&pickup[nickname]=${encodeURIComponent(pickup || '')}&dropoff[formatted_address]=${encodeURIComponent(dest || '')}&dropoff[nickname]=${encodeURIComponent(dest || '')}`;
+    const legLabel = leg === 'to_work' ? 'To work' : 'Way back';
+
     return (
-      <li className={`ride-card ${isDone ? 'is-done' : ''}`}>
-        <form action={isDone ? unmarkDone : markDone} className="ride-check">
-          <input type="hidden" name="id" value={ride.id} />
-          <button type="submit" className="check-btn" aria-label={isDone ? 'Mark as not done' : 'Mark as done'}>
-            {isDone ? '✓' : ''}
+      <li className={`ride-card ${status !== 'pending' ? 'is-done' : ''}`}>
+        <form action={status === 'done' ? uncompleteLeg : completeLeg} className="ride-check">
+          <input type="hidden" name="ride_id" value={ride.id} />
+          <input type="hidden" name="leg" value={leg} />
+          <input type="hidden" name="name" value={ride.name} />
+          <input type="hidden" name="amount" value={ride.amount} />
+          <button type="submit" className="check-btn" aria-label="Toggle done" disabled={status === 'skipped'}>
+            {status === 'done' ? '✓' : status === 'skipped' ? '–' : ''}
           </button>
         </form>
         <div className="ride-body">
           <div className="ride-top">
-            <span className="ride-time">{formatTime(ride.time)}</span>
-            <span className="ride-price">{formatMoney(Number(ride.price))}</span>
+            <span className="ride-time">{formatTime(legTime(ride, leg))} · {legLabel}</span>
+            <span className="ride-price">{formatMoney(Number(ride.amount))}</span>
           </div>
           <p className="ride-name">
-            {customer?.name ?? 'Unknown customer'}
+            {ride.name}
             {view === 'both' && <span className="agent-tag">{ride.agent}</span>}
+            {status === 'skipped' && <span className="agent-tag">Skipped</span>}
           </p>
-          <p className="ride-route">{ride.pickup} → {ride.dropoff}</p>
+          <p className="ride-route">{pickup} → {dest}</p>
           <div className="ride-actions">
             {telHref && <a href={telHref} className="action-btn">Call</a>}
             {waHref && <a href={waHref} className="action-btn" target="_blank" rel="noopener noreferrer">WhatsApp</a>}
             <a href={uberHref} className="action-btn" target="_blank" rel="noopener noreferrer">Uber</a>
-            {customer?.cliq_alias && <CliqCopyButton alias={customer.cliq_alias} />}
+            {ride.cliq_alias && <CliqCopyButton alias={ride.cliq_alias} />}
+            {status === 'pending' && (
+              <form action={skipLeg}>
+                <input type="hidden" name="ride_id" value={ride.id} />
+                <input type="hidden" name="leg" value={leg} />
+                <button type="submit" className="action-btn">Skip</button>
+              </form>
+            )}
+            {status === 'skipped' && (
+              <form action={unskipLeg}>
+                <input type="hidden" name="ride_id" value={ride.id} />
+                <input type="hidden" name="leg" value={leg} />
+                <button type="submit" className="action-btn">Unskip</button>
+              </form>
+            )}
           </div>
         </div>
       </li>
@@ -69,7 +105,7 @@ export default async function TodayPage({
     <main className="screen">
       <header className="topbar">
         <div>
-          <p className="eyebrow">{agent === 'hamzah' ? 'Hamzah' : 'Talal'}</p>
+          <p className="eyebrow">{agent}</p>
           <h1 className="today-date">Today</h1>
         </div>
         <div className="view-toggle">
@@ -80,36 +116,32 @@ export default async function TodayPage({
 
       <div className="summary-strip">
         <span>{pending.length} left</span>
-        <span>{done.length} done</span>
+        <span>{resolved.filter((i) => i.status === 'done').length} done</span>
         <span>{earnedToday.toFixed(3)} JOD</span>
       </div>
 
       <details className="add-customer">
-        <summary>+ Add ride</summary>
-        {(!myCustomers || myCustomers.length === 0) ? (
+        <summary>+ Add one-off ride</summary>
+        {(!customerOptions.length) ? (
           <p className="empty">No customers yet. <Link href="/customers">Add one first</Link>.</p>
-        ) : (
-          <form action={addOneOffRide} className="form">
-            <label>Customer
-              <select name="customer_id" required>
-                {myCustomers.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </label>
-            <label>Pickup<input type="text" name="pickup" required /></label>
-            <label>Dropoff<input type="text" name="dropoff" required /></label>
-            <label>Time<input type="time" name="time" required /></label>
-            <label>Price (JOD)<input type="number" name="price" step="0.001" min="0" required /></label>
-            <label>Date<input type="date" name="business_date" defaultValue={businessDate} required /></label>
-            <button type="submit" className="primary-btn">Add ride</button>
-          </form>
-        )}
+        ) : null}
+        <form action={addOneOffRide} className="form">
+          <label>Name<input type="text" name="name" required /></label>
+          <label>Mobile number<input type="tel" name="mobile_number" placeholder="07XXXXXXXX" /></label>
+          <label>Pickup<input type="text" name="pickup" required /></label>
+          <label>Dropoff<input type="text" name="dropoff" required /></label>
+          <label>Time<input type="time" name="time" required /></label>
+          <label>Price (JOD)<input type="number" name="amount" step="0.001" min="0" required /></label>
+          <label>Date<input type="date" name="business_date" defaultValue={businessDate} required /></label>
+          <button type="submit" className="primary-btn">Add ride</button>
+        </form>
       </details>
 
-      {rides.length === 0 && <p className="empty">No rides today.</p>}
+      {items.length === 0 && <p className="empty">No rides today.</p>}
 
       <ul className="ride-list">
-        {pending.map((ride) => <RideRow key={ride.id} ride={ride} isDone={false} />)}
-        {done.map((ride) => <RideRow key={ride.id} ride={ride} isDone />)}
+        {pending.map((item) => <LegCard key={`${item.ride.id}-${item.leg}`} item={item} />)}
+        {resolved.map((item) => <LegCard key={`${item.ride.id}-${item.leg}`} item={item} />)}
       </ul>
 
       <NavBar active="today" />
