@@ -2,7 +2,8 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { db, requireAgent, getBusinessDate, legCompletedField, legSkippedField, type Leg } from './core';
+import { db, requireAgent } from './core';
+import { getBusinessDate, legCompletedField, legSkippedField, type Leg } from './format';
 
 export async function login(formData: FormData) {
   const password = formData.get('password');
@@ -36,6 +37,7 @@ export async function completeLeg(formData: FormData) {
     ride_id: rideId, agent, customer_name: name, leg, amount, business_day: bDay,
   });
   revalidatePath('/today');
+  revalidatePath('/earnings');
 }
 
 export async function uncompleteLeg(formData: FormData) {
@@ -47,6 +49,7 @@ export async function uncompleteLeg(formData: FormData) {
   await db().from('rides').update({ [legCompletedField(leg)]: null }).eq('id', rideId);
   await db().from('trip_history').delete().eq('ride_id', rideId).eq('leg', leg).eq('business_day', bDay);
   revalidatePath('/today');
+  revalidatePath('/earnings');
 }
 
 export async function skipLeg(formData: FormData) {
@@ -87,7 +90,8 @@ export async function addOneOffRide(formData: FormData) {
 export async function saveRide(formData: FormData) {
   const agent = await requireAgent();
   const id = formData.get('id') as string | null;
-  const days = formData.getAll('days').map(Number);
+  const everyDay = formData.get('every_day') === 'on';
+  const days = everyDay ? [] : formData.getAll('days').map(Number);
   const oneTimeDate = (formData.get('one_time_date') as string) || null;
 
   const payload: any = {
