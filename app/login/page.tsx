@@ -20,8 +20,8 @@ export default async function LoginPage({
           <input type="password" name="password" placeholder="Password" required autoFocus />
           {error && <p className="error">Wrong password</p>}
           <div className="agent-pick">
-            <button type="submit" name="agent" value="hamzah" className="agent-btn">Hamzah</button>
-            <button type="submit" name="agent" value="talal" className="agent-btn">Talal</button>
+            <button type="submit" name="agent" value="Hamzah" className="agent-btn">Hamzah</button>
+            <button type="submit" name="agent" value="Talal" className="agent-btn">Talal</button>
           </div>
         </form>
       </div>
