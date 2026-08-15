@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { requireAgent, db, getBusinessDate, addDays, formatMoney, sumDistinctRideDay } from '@/lib/core';
+import { requireAgent, db } from '@/lib/core';
+import { getBusinessDate, addDays, formatMoney, sumDistinctRideDay } from '@/lib/format';
 import { NavBar } from '@/components/ui';
 
 export default async function EarningsPage({
